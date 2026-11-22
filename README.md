@@ -2,24 +2,51 @@
 
 A Node.js and TypeScript API that compares hotel prices from two mock suppliers. Express serves the routes, Temporal runs the comparison, and Redis stores the results and applies price filters.
 
-## Run with Docker Compose
+## Run in GitHub Codespaces
 
-Install Docker Desktop with Docker Compose enabled, then run this from the project directory.
+On this repository's GitHub page, select **Code → Codespaces → Create codespace on main**. When the browser editor opens, select **Terminal → New Terminal** and run the commands below from the repository root. The Codespace runs the containers, so you can use this setup without installing Docker Desktop on your computer.
+
+```bash
+docker compose up --build -d
+docker compose ps
+```
+
+Once `api`, `worker`, `redis`, and `temporal` are running, send a few requests from the same terminal.
+
+```bash
+curl -fsS "http://localhost:3000/health"
+curl -fsS "http://localhost:3000/api/hotels?city=delhi"
+curl -fsS "http://localhost:3000/api/hotels?city=delhi&minPrice=5300&maxPrice=5500"
+curl -fsS "http://localhost:3000/api/hotels?city=jaipur"
+```
+
+Delhi returns Holtin and Radison. The filtered request returns only Holtin, and Jaipur returns an empty array.
+
+To inspect a workflow, open the **Ports** tab, forward port **8233**, and open the forwarded address for the Temporal UI. After sending the first Delhi request, look for a `compareHotelOffers` workflow to see the two supplier activities. You can also query the cached price range directly from the terminal.
+
+```bash
+docker compose exec redis redis-cli ZRANGE hotel-offers:v1:delhi 5300 5500 BYSCORE
+```
+
+If a container exits or a request fails, check the status and logs.
+
+```bash
+docker compose ps -a
+docker compose logs --tail=50 api worker redis temporal
+```
+
+When finished, run `docker compose down`, then stop the Codespace from [Your codespaces](https://github.com/codespaces).
+
+## Run locally or on a Docker host
+
+With Docker and Compose installed, run the same commands from the project directory.
 
 ```sh
 docker compose up --build -d
 docker compose ps
 ```
 
-- API and mock suppliers at [http://localhost:3000](http://localhost:3000)
-- Temporal UI and workflow history at [http://localhost:8233](http://localhost:8233)
-
-The Compose stack uses a Temporal development server and binds the exposed ports to the host's loopback interface. The Redis cache and Temporal workflow history are disposable for the assessment. Run the same Compose command on a Docker host for a demo deployment and access it locally on that host or through an SSH tunnel.
-
-```sh
-docker compose logs -f api worker
-docker compose down
-```
+The API listens on port 3000 and the Temporal UI listens on port 8233. Compose binds both ports to the host's loopback interface. For a demo on a remote Docker host, access them through an SSH tunnel. The stack uses a Temporal development server and treats cached results and workflow history as disposable.
 
 ## Endpoints
 
@@ -52,28 +79,29 @@ The mock routes also accept requests without a city and return all their availab
 
 If a supplier call fails, Temporal retries it once. If comparison still fails on a cache miss, the API returns HTTP 502. Cached results remain available until expiry. A Redis error returns HTTP 503.
 
-## Test with Postman
+## Run the Postman collection
 
-Import `postman/Hotel_Offer_Orchestrator.postman_collection.json` and run the collection against the Compose stack. It checks deduplication, cheapest supplier and commission, price ranges, a city with no results, invalid input, and supplier health.
+In Codespaces, run the collection from the terminal with Newman.
 
-To simulate a supplier outage, create a `.env` file with `MOCK_SUPPLIER_B_DOWN=true` and run:
-
-```sh
-docker compose up -d api
-docker compose exec redis redis-cli DEL hotel-offers:v1:delhi
+```bash
+npx --yes newman@6.2.2 run postman/Hotel_Offer_Orchestrator.postman_collection.json
 ```
 
-Now `/health` returns 503 and marks Supplier B down. A fresh `/api/hotels?city=delhi` request returns 502 after the activity retry. Set the flag back to `false` and run `docker compose up -d api` to restore service.
+Expect **8 requests, 16 assertions, and 0 failures**. For a local Compose stack, you can import [the collection](postman/Hotel_Offer_Orchestrator.postman_collection.json) into Postman and run it with `baseUrl` set to `http://localhost:3000`.
 
-## GitHub submission
+### Simulate a supplier outage
 
-Create a repository on GitHub and push the files in this project directory. Start with an empty repository so the first push does not need to merge generated files.
+In the Codespaces terminal, recreate the API with Supplier B disabled and clear the Delhi cache key.
 
-```sh
-git init
-git add .
-git commit -m "Build hotel offer orchestrator"
-git branch -M main
-git remote add origin https://github.com/YOUR_USERNAME/hotel-offer-orchestrator.git
-git push -u origin main
+```bash
+MOCK_SUPPLIER_B_DOWN=true docker compose up -d api
+docker compose exec redis redis-cli DEL hotel-offers:v1:delhi
+curl -si "http://localhost:3000/health"
+curl -si "http://localhost:3000/api/hotels?city=delhi"
+```
+
+The health check returns HTTP 503 and reports Supplier B as down. The fresh Delhi search returns HTTP 502 after the activity retry. Restore Supplier B before rerunning the Postman collection.
+
+```bash
+MOCK_SUPPLIER_B_DOWN=false docker compose up -d api
 ```
