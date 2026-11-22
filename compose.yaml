@@ -1,0 +1,48 @@
+services:
+  api:
+    build: .
+    init: true
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      REDIS_URL: redis://redis:6379
+      MOCK_SUPPLIER_A_DOWN: "${MOCK_SUPPLIER_A_DOWN:-false}"
+      MOCK_SUPPLIER_B_DOWN: "${MOCK_SUPPLIER_B_DOWN:-false}"
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      redis:
+        condition: service_healthy
+      temporal:
+        condition: service_healthy
+
+  worker:
+    build: .
+    init: true
+    command: ["node", "dist/worker.js"]
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      SUPPLIER_BASE_URL: http://api:3000
+    depends_on:
+      temporal:
+        condition: service_healthy
+      api:
+        condition: service_started
+
+  redis:
+    image: redis:7.4.2-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  temporal:
+    image: temporalio/temporal:1.6.1
+    command: ["server", "start-dev", "--ip", "0.0.0.0"]
+    ports:
+      - "127.0.0.1:8233:8233"
+    healthcheck:
+      test: ["CMD", "temporal", "operator", "cluster", "health", "--address", "127.0.0.1:7233"]
+      interval: 5s
+      timeout: 4s
+      retries: 20
